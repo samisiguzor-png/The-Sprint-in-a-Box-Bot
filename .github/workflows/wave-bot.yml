@@ -1,0 +1,122 @@
+name: Drips Wave Monitor
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: '0 0 * * *'  # Daily announcement
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Manual action: announce | lockdown | tally'
+        required: true
+        default: 'announce'
+
+jobs:
+  tally_points:
+    name: Tally Points on Merge
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract points from PR labels
+        id: points
+        run: |
+          POINTS=$(node .github/scripts/extract-points.js '${{ toJson(github.event.pull_request.labels) }}')
+          echo "points=$POINTS" >> $GITHUB_OUTPUT
+
+      - name: Comment on merged PR
+        if: steps.points.outputs.points != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🎉 Success! **${{ steps.points.outputs.points }} Points** have been added to your Wave Profile.`
+            });
+
+      - name: Generate tally summary
+        run: node .github/scripts/tally-summary.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+
+      - name: Commit SUMMARY.md
+        run: |
+          git config user.name "WaveBot"
+          git config user.email "wavebot@users.noreply.github.com"
+          git add SUMMARY.md
+          git diff --cached --quiet || git commit -m "chore: update wave tally [skip ci]"
+          git push
+
+  daily_announce:
+    name: Daily Wave Status Announcement
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'announce')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update README wave status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const now = new Date().toISOString().split('T')[0];
+            let readme = fs.readFileSync('README.md', 'utf8');
+            readme = readme.replace(
+              /<!-- WAVE_STATUS_START -->[\s\S]*<!-- WAVE_STATUS_END -->/,
+              `<!-- WAVE_STATUS_START -->\n> 🌊 **Wave Active** — Last updated: ${now}\n<!-- WAVE_STATUS_END -->`
+            );
+            fs.writeFileSync('README.md', readme);
+
+      - name: Commit README update
+        run: |
+          git config user.name "WaveBot"
+          git config user.email "wavebot@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet || git commit -m "chore: daily wave status update [skip ci]"
+          git push
+
+  lockdown:
+    name: Lock Wave Labels at Cycle End
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'lockdown'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove Wave labels from open issues
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'Wave',
+              state: 'open',
+              per_page: 100
+            });
+            for (const issue of issues) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                name: 'Wave'
+              }).catch(() => {});
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: '🔒 Wave cycle has ended. Points are now locked.'
+              });
+            }
