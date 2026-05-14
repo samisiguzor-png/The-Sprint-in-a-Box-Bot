@@ -3,7 +3,7 @@
 > Your automated referee for the **Fix, Merge, Earn** cycle.
 
 <!-- WAVE_STATUS_START -->
-> 🌊 **Wave Active** — Last updated: 2026-05-13
+> 🌊 **Wave Active** — Last updated: 2026-05-14
 <!-- WAVE_STATUS_END -->
 ```
 
